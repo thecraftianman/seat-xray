@@ -6,7 +6,6 @@ local pi = math.pi
 local sqrt = math.sqrt
 local curtime = CurTime
 local IsValid = IsValid
---local realFrameTime = RealFrameTime
 
 if SERVER then
     util.AddNetworkString("march.seatxray.request_use")
@@ -72,7 +71,7 @@ if CLIENT then
             local iterations = ceil(t / self.tcrit)
             t = t / iterations
 
-            for i = 0, iterations do
+            for _ = 0, iterations do
                 self.y = self.y + t * self.yd
                 self.yd = self.yd + t * (x + self.k3 * xd - self.y - self.k1 * self.yd) / self.k2
             end
@@ -102,12 +101,12 @@ if CLIENT then
     -- gets all seats within use_max_distance's radius
     -- the seats must be owned by the localplayer and something must be in the way for the seat to be added
     local function getSeats()
-        local eyepos = LocalPlayer():EyePos()
-        local ents = ents.FindInSphere(eyepos, use_max_distance)
+        local locply = LocalPlayer()
+        local ents = ents.FindByClass("prop_vehicle_prisoner_pod")
         local seats = {}
 
         for _, v in ipairs(ents) do
-            if IsValid(v) and v:IsVehicle() and v:CPPIGetOwner() == LocalPlayer() and isSomethingInTheWay(v) then
+            if IsValid(v) and v:CPPIGetOwner() == locply and v:GetPos():Distance(locply:GetPos()) <= use_max_distance and isSomethingInTheWay(v) then
                 seats[#seats + 1] = v
             end
         end
@@ -118,12 +117,13 @@ if CLIENT then
     -- finds all entities the player is looking at, from the eyepos to use_max_distance, then returns sorted from closest to furthest
     local function xrayEntitiesAlongEyetrace()
         local eyetrace = LocalPlayer():GetEyeTrace()
-        local nrml = (eyetrace.HitPos - eyetrace.StartPos):GetNormalized()
+        local startpos = eyetrace.StartPos
+        local nrml = (eyetrace.HitPos - startpos):GetNormalized()
 
-        local hits = ents.FindAlongRay(eyetrace.StartPos, eyetrace.StartPos + (nrml * use_max_distance))
+        local hits = ents.FindAlongRay(startpos, startpos + (nrml * use_max_distance))
 
         table.sort(hits, function(a, b)
-            return b:GetPos():Distance(eyetrace.StartPos) > a:GetPos():Distance(eyetrace.StartPos)
+            return b:GetPos():Distance(startpos) > a:GetPos():Distance(startpos)
         end)
 
         return hits
@@ -149,6 +149,7 @@ if CLIENT then
 
     local function isSeatXrayEnabled()
         if not seatxray_enable:GetBool() then return false end
+        if LocalPlayer():InVehicle() then return false end
         if hook.Run("march.seatxray.block_all") == true then return false end
 
         return true
@@ -162,7 +163,7 @@ if CLIENT then
         return true
     end
 
-    timer.Create("march.seatxray.update", 1 / 10, 0, function()
+    timer.Create("march.seatxray.update", 1 / 7, 0, function()
         if not IsValid(LocalPlayer()) then return end -- prevents error where localplayer isn't initialized so getSeats complains
         seats = {}
         lookat = nil
@@ -204,14 +205,14 @@ if CLIENT then
         local text, vtext = "", ""
         local lastToggle = 0
 
-        local function renderer(scrw, scrh, seats, lookat)
-            if window_opacity.y <= 0.01 and #seats == 0 then lastToggle = 0 return end
+        local function renderer(scrw, scrh, curseats, curlookat)
+            if window_opacity.y <= 0.01 and #curseats == 0 then lastToggle = 0 return end
 
             local a, w, h = 0, 0, 0, 0, 0
 
-            if IsValid(lookat) then
+            if IsValid(curlookat) then
                 if shouldUseKeyWork() then
-                    vtext = "Press [" .. string.upper(input.LookupBinding("+use")) .. "] to enter vehicle #" .. lookat:EntIndex()
+                    vtext = "Press [" .. string.upper(input.LookupBinding("+use")) .. "] to enter vehicle #" .. curlookat:EntIndex()
                 else
                     vtext = "Cannot enter seat while mouse is down."
                 end
@@ -219,7 +220,7 @@ if CLIENT then
                 vtext = "                         "
             end
 
-            if #seats == 0 then
+            if #curseats == 0 then
                 w = window_width:update(0)
                 h = window_height:update(0)
                 a = window_opacity:update(0)
@@ -232,7 +233,7 @@ if CLIENT then
                 if lastToggle == 0 then
                     lastToggle = CurTime()
                 end
-                text = #seats .. " seat" .. (#seats == 1 and "" or "s") .. " available"
+                text = #curseats .. " seat" .. (#curseats == 1 and "" or "s") .. " available"
             end
 
             local wd2, hd2 = scrw / 2, scrh / 2
@@ -243,7 +244,7 @@ if CLIENT then
             surface.DrawOutlinedRect(center(wd2, hd2 + 66, w, h, 1))
 
             local xM, xA
-            if IsValid(lookat) then
+            if IsValid(curlookat) then
                 xM = extra_text_movement:update(8)
                 xA = extra_text_opacity:update(1)
             else
@@ -342,7 +343,7 @@ if CLIENT then
 
         local renderMock2D, renderMock3D, uiRenderer
 
-        function frame:Paint(w, h)
+        function frame:Paint(w)
             box(0, 0, w, 24)
         end
 
@@ -422,10 +423,10 @@ if CLIENT then
             end
         end
 
-        local function NumericalConvar(name, convar, min, max, updates2D)
+        local function NumericalConvar(_, convar, min, max, updates2D)
             updates2D = updates2D or false
-            local contentPanel, basePanel = ConvarEditor(name, convar)
-            local convarObj = GetConVar(convar)
+            -- local contentPanel, basePanel = ConvarEditor(name, convar)
+            -- local convarObj = GetConVar(convar)
 
             local numSlider = RightPanel:Add("DNumSlider")
             numSlider:Dock(TOP)
@@ -437,7 +438,7 @@ if CLIENT then
             numSlider:SetConVar(convar)
 
             if updates2D then
-                function numSlider:OnValueChanged(val)
+                function numSlider:OnValueChanged()
                     uiRenderer = seatUIRenderer()
                 end
             end
@@ -475,10 +476,10 @@ if CLIENT then
 
         renderMock3D = LeftPanel:Add("DModelPanel")
         renderMock3D:Dock(FILL)
-        renderMock3D:SetModel( "models/props_combine/breenchair.mdl" ) -- you can only change colors on playermodels
+        renderMock3D:SetModel("models/props_combine/breenchair.mdl") -- you can only change colors on playermodels
         renderMock3D:SetFOV(25)
         renderMock3D.distance = 222
-        function renderMock3D:LayoutEntity( Entity ) return end -- disables default rotation
+        function renderMock3D:LayoutEntity() return end -- disables default rotation
 
         function renderMock3D:PreDrawModel()
             frame.csent2:DrawModel()
